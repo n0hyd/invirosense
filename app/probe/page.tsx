@@ -1,0 +1,20 @@
+﻿"use client";
+
+import { useEffect } from "react";
+import { supabase } from "@/lib/supabase"; // If this import fails, see note below.
+
+export default function ProbePage() {
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      console.log("user:", data.user ?? null);
+    })();
+  }, []);
+
+  return (
+    <main style={{ padding: 24 }}>
+      <h1>Probe</h1>
+      <p>Open the browser console to see <code>user</code> logged.</p>
+    </main>
+  );
+}
