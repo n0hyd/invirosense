@@ -46,3 +46,4 @@ node_modules/
 .vscode/
 supabase/.temp/
 supabase/.branches/
+*.zip
