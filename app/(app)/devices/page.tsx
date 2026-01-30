@@ -1,5 +1,6 @@
-// app/(app)/devices/page.tsx
+﻿// app/(app)/devices/page.tsx
 import Link from "next/link";
+import { cookies } from "next/headers";
 import DeviceCard from "@/components/DeviceCard";
 import { createClient } from "@/lib/supabase/server";
 
@@ -12,6 +13,8 @@ type Device = {
   temp_max: number | null; // °C
   rh_min: number | null;   // %
   rh_max: number | null;   // %
+  report_interval_min: number | null;
+  sample_interval_min: number | null;
 };
 
 type CurrentReading = {
@@ -54,12 +57,20 @@ export default async function DevicesPage({
   const unit: "F" | "C" = unitParam === "C" ? "C" : "F";
 
   const supabase = await createClient();
+  const cookieStore = await cookies();
+  const activeOrgId = cookieStore.get("orgId")?.value ?? null;
 
   // 1) Devices (RLS scopes to viewer's orgs)
-  const { data: devicesData, error: devicesErr } = await supabase
+  let devicesQuery = supabase
     .from("devices")
-    .select("id,name,status,temp_min,temp_max,rh_min,rh_max")
+    .select("id,name,status,temp_min,temp_max,rh_min,rh_max,report_interval_min,sample_interval_min")
     .order("name", { ascending: true });
+
+  if (activeOrgId) {
+    devicesQuery = devicesQuery.eq("organization_id", activeOrgId);
+  }
+
+  const { data: devicesData, error: devicesErr } = await devicesQuery;
 
   if (devicesErr) {
     return (
@@ -80,6 +91,8 @@ export default async function DevicesPage({
     temp_max: num(d.temp_max),
     rh_min: num(d.rh_min),
     rh_max: num(d.rh_max),
+    report_interval_min: num(d.report_interval_min),
+    sample_interval_min: num(d.sample_interval_min),
   }));
 
   if (devices.length === 0) {
@@ -201,10 +214,20 @@ export default async function DevicesPage({
   return (
     <div className="mx-auto max-w-7xl p-4">
       {/* Strong, high-contrast heading + subhead */}
-      <h1 className="text-3xl font-bold tracking-tight text-zinc-900">Devices</h1>
-      <p className="mt-1 text-base font-medium text-zinc-700">
-        Live status and latest readings
-      </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-zinc-900">Devices</h1>
+          <p className="mt-1 text-base font-medium text-zinc-700">
+            Live status and latest readings
+          </p>
+        </div>
+        <Link
+          href={activeOrgId ? `/orgs/${activeOrgId}` : "/orgs"}
+          className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-zinc-800"
+        >
+          Add device
+        </Link>
+      </div>
 
       {/* Unit toggle (server links preserve ?unit) */}
       <div className="mt-4 flex items-center gap-2">
@@ -255,7 +278,7 @@ export default async function DevicesPage({
               }}
               unit={unit}
               href={`/device/${d.id}?unit=${unit}`}
-              expectedIntervalMin={DEFAULT_EXPECTED_INTERVAL_MIN}
+              expectedIntervalMin={d.sample_interval_min ?? d.report_interval_min ?? DEFAULT_EXPECTED_INTERVAL_MIN}
             />
           );
         })}

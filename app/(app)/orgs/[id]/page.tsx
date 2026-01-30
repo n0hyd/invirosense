@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import ClaimCodeCard from "@/components/ClaimCodeCard";
 
 type Params = { id: string };
 
@@ -47,13 +48,24 @@ export default async function OrgDetailPage({
             <span className="font-mono">ID: {org?.id}</span>
             {org?.created_at && (
               <>
-                <span className="px-2">•</span>
+                <span className="px-2">-</span>
                 Created {new Date(org.created_at).toLocaleString()}
               </>
             )}
           </div>
         </div>
       </div>
+
+      {/* Members */}
+      <section>
+        <h2 className="text-lg font-semibold text-zinc-900">Add a device</h2>
+        <p className="mt-1 text-sm text-zinc-600">
+          Generate a temporary code and enter it on the device&apos;s setup portal.
+        </p>
+        <div className="mt-3 max-w-xl">
+          <ClaimCodeCard orgId={org.id} />
+        </div>
+      </section>
 
       {/* Members */}
       <section>

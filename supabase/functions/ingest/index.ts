@@ -24,7 +24,7 @@ function json(resBody: unknown, status = 200) {
       "content-type": "application/json",
       // Basic CORS (optional; keeps device firmware/http clients happy)
       "access-control-allow-origin": "*",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "content-type, authorization, apikey",
       "access-control-allow-methods": "POST, OPTIONS",
     },
   });

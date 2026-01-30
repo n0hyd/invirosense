@@ -1,4 +1,4 @@
-// components/DeviceCard.tsx — Equal Height + Last Check‑in under Current + Unit‑safe Alerts
+﻿// components/DeviceCard.tsx - Equal Height + Last Check-in under Current + Unit-safe Alerts
 
 import Link from "next/link";
 import clsx from "clsx";
@@ -33,13 +33,13 @@ export type DeviceCardProps = {
 // ---------- Helpers ----------
 const cToF = (c: number) => (c * 9) / 5 + 32;
 const fmtTempAbs = (c: number | null | undefined, unit: "F" | "C") => {
-  if (c == null || !Number.isFinite(Number(c))) return "—";
+  if (c == null || !Number.isFinite(Number(c))) return "-";
   const v = Number(c);
   return unit === "F" ? `${cToF(v).toFixed(1)}°F` : `${v.toFixed(1)}°C`;
 };
 const fmtTempDelta = (cDiff: number, unit: "F" | "C") =>
   unit === "F" ? `${((cDiff * 9) / 5).toFixed(1)}°F` : `${cDiff.toFixed(1)}°C`;
-const fmtRHAbs = (v: number | null | undefined) => (v == null ? "—" : `${Number(v).toFixed(0)}%`);
+const fmtRHAbs = (v: number | null | undefined) => (v == null ? "-" : `${Number(v).toFixed(0)}%`);
 
 function timeAgo(tsISO?: string | null): string {
   if (!tsISO) return "never";
@@ -94,11 +94,11 @@ export default function DeviceCard({ device, current, stats24h, unit, href, expe
   if (rhLow && rhMin != null && rh != null)    alertLines.push(`RH under min by ${Math.round(rhMin - rh)}%`);
   if (rhHigh && rhMax != null && rh != null)   alertLines.push(`RH over max by ${Math.round(rh - rhMax)}%`);
 
-  const tempRangeLabel = `${fmtTempAbs(tMinC, unit)} – ${fmtTempAbs(tMaxC, unit)}`;
-  const rhRangeLabel = `${fmtRHAbs(rhMin)} – ${fmtRHAbs(rhMax)}`;
+  const tempRangeLabel = `${fmtTempAbs(tMinC, unit)} - ${fmtTempAbs(tMaxC, unit)}`;
+  const rhRangeLabel = `${fmtRHAbs(rhMin)} - ${fmtRHAbs(rhMax)}`;
 
   const currentTempLabel = fmtTempAbs(tC, unit);
-  const currentRHLabel = rh == null ? "—" : `${rh.toFixed(1)}%`;
+  const currentRHLabel = rh == null ? "-" : `${rh.toFixed(1)}%`;
 
   const Pill = ({ children, variant }: { children: React.ReactNode; variant: "online" | "offline" | "alert" }) => (
     <span
@@ -163,21 +163,21 @@ export default function DeviceCard({ device, current, stats24h, unit, href, expe
         </div>
 
         {/* Last check-in right under current readings */}
-        <p className="text-[11px] text-zinc-500">Last check‑in: {timeAgo(current?.at)}</p>
+        <p className="text-[11px] text-zinc-500">Last check'in: {timeAgo(current?.at)}</p>
 
         {/* 24h hi/lo inline */}
         <div className="text-xs text-zinc-600 flex flex-wrap gap-x-4 gap-y-0.5">
           <div>
-            <span className="font-medium">24h High:</span> {fmtTempAbs(hiTempC, unit)} · {fmtRHAbs(hiRH)}
+            <span className="font-medium">24h High:</span> {fmtTempAbs(hiTempC, unit)} - {fmtRHAbs(hiRH)}
           </div>
           <div>
-            <span className="font-medium">24h Low:</span> {fmtTempAbs(loTempC, unit)} · {fmtRHAbs(loRH)}
+            <span className="font-medium">24h Low:</span> {fmtTempAbs(loTempC, unit)} - {fmtRHAbs(loRH)}
           </div>
         </div>
 
         {/* Ranges */}
         <p className="text-xs text-zinc-600">
-          <span className="font-medium">Ranges:</span> Temp {tempRangeLabel} · RH {rhRangeLabel}
+          <span className="font-medium">Ranges:</span> Temp {tempRangeLabel} - RH {rhRangeLabel}
         </p>
 
         {/* Alerts (stick to bottom, equal height) */}

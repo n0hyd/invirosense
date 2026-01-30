@@ -17,6 +17,8 @@ const DEVICE_FIELDS = [
 "model",
 "channel",
 "firmware_version",
+"report_interval_min",
+"sample_interval_min",
 ] as const;
 
 

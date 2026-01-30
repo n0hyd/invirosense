@@ -44,7 +44,7 @@ export default function LoginPage() {
 
       {status === "sent" ? (
         <div className="rounded-md border p-4">
-          Check your email for a magic link. Once you click it, we’ll send you
+          Check your email for a magic link. Once you click it, we'll send you
           back to: <code className="px-1">{nextParam}</code>
         </div>
       ) : (
@@ -69,7 +69,7 @@ export default function LoginPage() {
             disabled={status === "sending"}
             className="rounded-md border px-4 py-2"
           >
-            {status === "sending" ? "Sending…" : "Send magic link"}
+            {status === "sending" ? "Sending..." : "Send magic link"}
           </button>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -77,7 +77,7 @@ export default function LoginPage() {
       )}
 
       <p className="mt-4 text-sm text-gray-600">
-        After signing in you’ll return to <code className="px-1">{nextParam}</code>
+        After signing in you'll return to <code className="px-1">{nextParam}</code>
       </p>
     </div>
   );

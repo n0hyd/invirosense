@@ -1,4 +1,4 @@
-// app/(app)/device/[id]/DevicePage.tsx — drop-in with frequency badge + persisted interval + safe onChange
+﻿// app/(app)/device/[id]/DevicePage.tsx " drop-in with frequency badge + persisted interval + safe onChange
 "use client";
 
 import * as React from "react";
@@ -28,7 +28,8 @@ export type Device = {
   model: string | null;
   channel: string | null;
   firmware_version: string | null;
-  // deep-sleep wake/send interval (minutes), optional in prop – we re-fetch it on mount
+  report_interval_min?: number | null;
+  // deep-sleep wake/send interval (minutes), optional in prop " we re-fetch it on mount
   sample_interval_min?: number | null;
 };
 
@@ -40,6 +41,25 @@ type Reading = {
 
 type DeviceStatus = "online" | "offline" | "alert";
 
+type AlertRow = {
+  id: number;
+  rule: string | null;
+  active: boolean;
+  breach_value: number | null;
+  recovery_value: number | null;
+  created_at: string;
+  recovered_at: string | null;
+};
+
+type AlertEventRow = {
+  id: number;
+  alert_id: number;
+  event_type: string;
+  value: number | null;
+  created_at: string;
+  alerts?: { rule: string | null } | null;
+};
+
 // ---------- Helpers ----------
 const cToF = (c: number) => (c * 9) / 5 + 32;
 const fToC = (f: number) => ((f - 32) * 5) / 9;
@@ -49,18 +69,36 @@ function isFiniteNum(v: unknown): v is number {
 }
 
 function fmtTemp(c: number | null, unit: "C" | "F" = "F") {
-  if (!isFiniteNum(c)) return "—";
+  if (!isFiniteNum(c)) return "-";
   const val = unit === "F" ? cToF(c) : c;
   const num = val.toFixed(1);
   return num + (unit === "F" ? "°F" : "°C");
 }
 
 function fmtRH(rh: number | null) {
-  if (!isFiniteNum(rh)) return "—";
+  if (!isFiniteNum(rh)) return "-";
   return String(Math.round(rh)) + "%";
 }
 
-const fmtTS = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
+const fmtTS = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "-");
+
+function formatRule(rule?: string | null) {
+  if (!rule) return "Alert";
+  const r = rule.toLowerCase();
+  if (r === "temp") return "Temperature";
+  if (r === "rh") return "Humidity";
+  if (r.includes("temp")) return "Temperature";
+  if (r.includes("rh") || r.includes("humidity")) return "Humidity";
+  return rule;
+}
+
+function formatAlertValue(value: number | null, rule: string | null | undefined, unit: "C" | "F") {
+  if (!isFiniteNum(value)) return "-";
+  const r = (rule ?? "").toLowerCase();
+  if (r.includes("temp")) return fmtTemp(value, unit);
+  if (r.includes("rh") || r.includes("humidity")) return fmtRH(value);
+  return String(value);
+}
 
 // ---------- UI bits ----------
 function StatusPill({ status }: { status: DeviceStatus }) {
@@ -148,12 +186,14 @@ function ThresholdAndFrequency({
     temp_max: number | null;
     rh_min: number | null;
     rh_max: number | null;
+    report_interval_min: number | null;
     sample_interval_min: number | null;
   }>({
     temp_min: null,
     temp_max: null,
     rh_min: null,
     rh_max: null,
+    report_interval_min: null,
     sample_interval_min: 15,
   });
   const [toast, setToast] = React.useState<string | null>(null);
@@ -164,7 +204,7 @@ function ThresholdAndFrequency({
       setLoading(true);
       const { data, error } = await supabase
         .from("devices")
-        .select("temp_min,temp_max,rh_min,rh_max,sample_interval_min")
+        .select("temp_min,temp_max,rh_min,rh_max,report_interval_min,sample_interval_min")
         .eq("id", deviceId)
         .maybeSingle();
       if (!alive) return;
@@ -176,6 +216,7 @@ function ThresholdAndFrequency({
           temp_max: (data as any).temp_max ?? null,
           rh_min: (data as any).rh_min ?? null,
           rh_max: (data as any).rh_max ?? null,
+          report_interval_min: (data as any).report_interval_min ?? null,
           sample_interval_min: (data as any).sample_interval_min ?? 15,
         });
       }
@@ -218,10 +259,12 @@ function ThresholdAndFrequency({
 
   const saveFreq = async () => {
     setSaving("freq");
-    const minutes = clampToStep(state.sample_interval_min ?? 15);
+    const minutes = clampToStep(
+      state.sample_interval_min ?? state.report_interval_min ?? 15
+    );
     const { error } = await supabase
       .from("devices")
-      .update({ sample_interval_min: minutes })
+      .update({ sample_interval_min: minutes, report_interval_min: minutes })
       .eq("id", deviceId);
     setSaving(null);
     if (error) {
@@ -239,8 +282,10 @@ function ThresholdAndFrequency({
 
   const onFreqChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = Number(e.target.value); // read synchronously to avoid pooled event nulls
-    setState((s) => ({ ...s, sample_interval_min: val }));
+    setState((s) => ({ ...s, sample_interval_min: val, report_interval_min: val }));
   };
+
+  const currentInterval = state.sample_interval_min ?? state.report_interval_min ?? 15;
 
   return (
     <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -249,12 +294,12 @@ function ThresholdAndFrequency({
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-base font-semibold text-zinc-900">Set Temperature Thresholds</h3>
           <span className="text-xs text-zinc-500">
-            Current: {viewTemp(state.temp_min) ?? "—"}°{unit} – {viewTemp(state.temp_max) ?? "—"}°
+            Current: {viewTemp(state.temp_min) ?? "-"}°{unit} - {viewTemp(state.temp_max) ?? "-"}°
             {unit}
           </span>
         </div>
         {loading ? (
-          <p className="text-sm text-zinc-500">Loading…</p>
+          <p className="text-sm text-zinc-500">Loading...</p>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <NumberField
@@ -279,7 +324,7 @@ function ThresholdAndFrequency({
             disabled={saving === "temp"}
             className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-60"
           >
-            {saving === "temp" ? "Saving…" : "Save Temperature"}
+            {saving === "temp" ? "Saving..." : "Save Temperature"}
           </button>
         </div>
       </div>
@@ -289,11 +334,11 @@ function ThresholdAndFrequency({
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-base font-semibold text-zinc-900">Set Humidity Thresholds</h3>
           <span className="text-xs text-zinc-500">
-            Current: {state.rh_min ?? "—"}% – {state.rh_max ?? "—"}%
+            Current: {state.rh_min ?? "-"}% - {state.rh_max ?? "-"}%
           </span>
         </div>
         {loading ? (
-          <p className="text-sm text-zinc-500">Loading…</p>
+          <p className="text-sm text-zinc-500">Loading...</p>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <NumberField
@@ -320,7 +365,7 @@ function ThresholdAndFrequency({
             disabled={saving === "rh"}
             className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-60"
           >
-            {saving === "rh" ? "Saving…" : "Save Humidity"}
+            {saving === "rh" ? "Saving..." : "Save Humidity"}
           </button>
         </div>
       </div>
@@ -333,17 +378,17 @@ function ThresholdAndFrequency({
             Sensor Frequency
           </h3>
           <span className="text-xs text-zinc-500">
-            Current: every {state.sample_interval_min ?? 15} min
+            Current: every {currentInterval} min
           </span>
         </div>
         {loading ? (
-          <p className="text-sm text-zinc-500">Loading…</p>
+          <p className="text-sm text-zinc-500">Loading...</p>
         ) : (
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium text-zinc-700">Wake/Send/Sleep interval</span>
             <select
               className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              value={state.sample_interval_min ?? 15}
+              value={currentInterval}
               onChange={onFreqChange}
             >
               {freqOptions.map((m) => (
@@ -363,7 +408,7 @@ function ThresholdAndFrequency({
             disabled={saving === "freq"}
             className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-60"
           >
-            {saving === "freq" ? "Saving…" : "Save Frequency"}
+            {saving === "freq" ? "Saving..." : "Save Frequency"}
           </button>
         </div>
       </div>
@@ -391,10 +436,17 @@ export default function DevicePage({
   const [readings, setReadings] = React.useState<Reading[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [unit, setUnit] = React.useState<"F" | "C">(unitProp);
+  const [alertEvents, setAlertEvents] = React.useState<AlertEventRow[]>([]);
+  const [activeAlerts, setActiveAlerts] = React.useState<AlertRow[]>([]);
+  const [alertsLoading, setAlertsLoading] = React.useState(true);
 
   // Live interval value (used for badge + offline logic)
   const [intervalMin, setIntervalMin] = React.useState<number>(
-    isFiniteNum(device.sample_interval_min) ? (device.sample_interval_min as number) : 15
+    isFiniteNum(device.sample_interval_min)
+      ? (device.sample_interval_min as number)
+      : isFiniteNum(device.report_interval_min)
+      ? (device.report_interval_min as number)
+      : 15
   );
 
   // On mount, fetch the persisted sample_interval_min so refreshes reflect DB
@@ -403,12 +455,15 @@ export default function DevicePage({
     (async () => {
       const { data, error } = await supabase
         .from("devices")
-        .select("sample_interval_min")
+        .select("report_interval_min,sample_interval_min")
         .eq("id", device.id)
         .maybeSingle();
       if (!alive) return;
-      if (!error && data && typeof data.sample_interval_min === "number") {
-        setIntervalMin(data.sample_interval_min);
+      if (!error && data) {
+        const sample = typeof data.sample_interval_min === "number" ? data.sample_interval_min : null;
+        const report = typeof data.report_interval_min === "number" ? data.report_interval_min : null;
+        const next = sample ?? report;
+        if (typeof next === "number") setIntervalMin(next);
       }
     })();
     return () => {
@@ -448,6 +503,35 @@ export default function DevicePage({
       }
     }
     load();
+    return () => {
+      cancelled = true;
+    };
+  }, [device.id, supabase]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    async function loadAlerts() {
+      setAlertsLoading(true);
+      const { data: alertsData } = await supabase
+        .from("alerts")
+        .select("id,rule,active,breach_value,recovery_value,created_at,recovered_at")
+        .eq("device_id", device.id)
+        .order("id", { ascending: false });
+
+      const { data: eventsData } = await supabase
+        .from("alert_events")
+        .select("id,alert_id,event_type,value,created_at,alerts ( rule )")
+        .eq("device_id", device.id)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (!cancelled) {
+        setActiveAlerts(((alertsData as AlertRow[]) ?? []).filter((a) => a.active));
+        setAlertEvents((eventsData as AlertEventRow[]) ?? []);
+        setAlertsLoading(false);
+      }
+    }
+    loadAlerts();
     return () => {
       cancelled = true;
     };
@@ -508,20 +592,26 @@ export default function DevicePage({
   }
   if (isFiniteNum(tempC)) {
     if (tempHighBreach) {
-      const deltaF = +(cToF(tempC) - cToF(device.temp_max!)).toFixed(1);
+      const delta =
+        unit === "F"
+          ? +(cToF(tempC) - cToF(device.temp_max!)).toFixed(1)
+          : +(tempC - device.temp_max!).toFixed(1);
       alerts.push(
         <li key="temp-high" className="flex items-start gap-2 text-red-700">
           <Thermometer className="mt-0.5 h-4 w-4" />
-          <span>{fmtTS(current?.ts)}: Temp is {deltaF}°F above maximum</span>
+          <span>{fmtTS(current?.ts)}: Temp is {delta}°{unit} above maximum</span>
         </li>
       );
     }
     if (tempLowBreach) {
-      const deltaF = +(cToF(device.temp_min!) - cToF(tempC)).toFixed(1);
+      const delta =
+        unit === "F"
+          ? +(cToF(device.temp_min!) - cToF(tempC)).toFixed(1)
+          : +(device.temp_min! - tempC).toFixed(1);
       alerts.push(
         <li key="temp-low" className="flex items-start gap-2 text-red-700">
           <Thermometer className="mt-0.5 h-4 w-4" />
-          <span>{fmtTS(current?.ts)}: Temp is {deltaF}°F below minimum</span>
+          <span>{fmtTS(current?.ts)}: Temp is {delta}°{unit} below minimum</span>
         </li>
       );
     }
@@ -648,7 +738,7 @@ export default function DevicePage({
         <div className="mt-3 h-64 w-full">
           {loading ? (
             <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-              Loading…
+              Loading...
             </div>
           ) : readings.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-zinc-500">
@@ -695,6 +785,55 @@ export default function DevicePage({
                 />
               </LineChart>
             </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      {/* Alert history */}
+      <div className="rounded-2xl bg-white p-4 shadow">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-zinc-500">Alert History</h3>
+          <span className="text-xs text-zinc-500">
+            {activeAlerts.length} active
+          </span>
+        </div>
+        <div className="mt-3 space-y-4 text-sm">
+          {alertsLoading ? (
+            <div className="text-zinc-500">Loading...</div>
+          ) : (
+            <>
+              {activeAlerts.length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-zinc-600">Active alerts</div>
+                  <ul className="mt-2 space-y-1">
+                    {activeAlerts.map((a) => (
+                      <li key={a.id} className="text-red-700">
+                        {formatRule(a.rule)} - Breach {formatAlertValue(a.breach_value, a.rule, unit)} - {fmtTS(a.created_at)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div>
+                <div className="text-xs font-medium text-zinc-600">Recent events</div>
+                {alertEvents.length === 0 ? (
+                  <div className="mt-2 text-zinc-500">No alert events yet.</div>
+                ) : (
+                  <ul className="mt-2 space-y-1">
+                    {alertEvents.map((e) => {
+                      const rule = e.alerts?.rule ?? null;
+                      const label = e.event_type === "breach" ? "Breach" : "Recovery";
+                      return (
+                        <li key={e.id} className="text-zinc-700">
+                          {label} - {formatRule(rule)} - {formatAlertValue(e.value, rule, unit)} - {fmtTS(e.created_at)}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>
