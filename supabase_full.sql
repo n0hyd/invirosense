@@ -766,7 +766,7 @@ CREATE TABLE IF NOT EXISTS "public"."memberships" (
     "organization_id" "uuid" NOT NULL,
     "role" "text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    CONSTRAINT "memberships_role_allowed_values" CHECK (("role" = ANY (ARRAY['owner'::"text", 'admin'::"text", 'viewer'::"text"])))
+    CONSTRAINT "memberships_role_allowed_values" CHECK (("role" = ANY (ARRAY['owner'::"text", 'admin'::"text", 'editor'::"text", 'viewer'::"text"])))
 );
 
 
@@ -782,8 +782,24 @@ CREATE TABLE IF NOT EXISTS "public"."organizations" (
 
 ALTER TABLE "public"."organizations" OWNER TO "postgres";
 
+CREATE TABLE IF NOT EXISTS "public"."org_invites" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "organization_id" "uuid" NOT NULL,
+    "email" "text" NOT NULL,
+    "role" "text" NOT NULL,
+    "invited_by" "uuid" NOT NULL,
+    "status" "text" DEFAULT 'pending'::"text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "last_sent_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "accepted_at" timestamp with time zone,
+    CONSTRAINT "org_invites_role_allowed_values" CHECK (("role" = ANY (ARRAY['owner'::"text", 'admin'::"text", 'editor'::"text", 'viewer'::"text"])))
+);
 
-CREATE OR REPLACE VIEW "public"."my_orgs" AS
+
+ALTER TABLE "public"."org_invites" OWNER TO "postgres";
+
+DROP VIEW IF EXISTS "public"."my_orgs";
+CREATE VIEW "public"."my_orgs" AS
  SELECT "o"."id",
     "o"."name",
     "o"."created_at"
@@ -893,6 +909,11 @@ ALTER TABLE ONLY "public"."organizations"
 ALTER TABLE ONLY "public"."organizations"
     ADD CONSTRAINT "organizations_pkey" PRIMARY KEY ("id");
 
+ALTER TABLE ONLY "public"."org_invites"
+    ADD CONSTRAINT "org_invites_pkey" PRIMARY KEY ("id");
+
+CREATE UNIQUE INDEX "org_invites_org_email_idx" ON "public"."org_invites" USING "btree" ("organization_id", "email");
+
 
 
 ALTER TABLE ONLY "public"."sensor_readings_hourly"
@@ -980,6 +1001,12 @@ ALTER TABLE ONLY "public"."claim_codes"
 ALTER TABLE ONLY "public"."devices"
     ADD CONSTRAINT "devices_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
 
+ALTER TABLE ONLY "public"."org_invites"
+    ADD CONSTRAINT "org_invites_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE;
+
+ALTER TABLE ONLY "public"."org_invites"
+    ADD CONSTRAINT "org_invites_invited_by_fkey" FOREIGN KEY ("invited_by") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
+
 
 
 ALTER TABLE ONLY "public"."memberships"
@@ -1024,10 +1051,31 @@ CREATE POLICY "alerts_select" ON "public"."alerts" FOR SELECT USING ((EXISTS ( S
 
 ALTER TABLE "public"."devices" ENABLE ROW LEVEL SECURITY;
 
+ALTER TABLE "public"."claim_codes" ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "devices_modify" ON "public"."devices" USING ((EXISTS ( SELECT 1
+DROP POLICY IF EXISTS "claim_codes_select" ON "public"."claim_codes";
+CREATE POLICY "claim_codes_select" ON "public"."claim_codes"
+  FOR SELECT
+  USING ("public"."is_org_member"("auth"."uid"(), "organization_id"));
+
+DROP POLICY IF EXISTS "claim_codes_insert" ON "public"."claim_codes";
+CREATE POLICY "claim_codes_insert" ON "public"."claim_codes"
+  FOR INSERT
+  WITH CHECK ("public"."is_org_admin_or_owner"("auth"."uid"(), "organization_id"));
+
+DROP POLICY IF EXISTS "claim_codes_delete" ON "public"."claim_codes";
+CREATE POLICY "claim_codes_delete" ON "public"."claim_codes"
+  FOR DELETE
+  USING ("public"."is_org_admin_or_owner"("auth"."uid"(), "organization_id"));
+
+
+CREATE POLICY "devices_update" ON "public"."devices" FOR UPDATE USING ((EXISTS ( SELECT 1
    FROM "public"."memberships" "m"
-  WHERE (("m"."organization_id" = "devices"."organization_id") AND ("m"."user_id" = "auth"."uid"()) AND ("m"."role" = 'owner'::"text"))))) WITH CHECK ((EXISTS ( SELECT 1
+  WHERE (("m"."organization_id" = "devices"."organization_id") AND ("m"."user_id" = "auth"."uid"()) AND ("m"."role" = ANY (ARRAY['owner'::"text", 'admin'::"text", 'editor'::"text"])))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."memberships" "m"
+  WHERE (("m"."organization_id" = "devices"."organization_id") AND ("m"."user_id" = "auth"."uid"()) AND ("m"."role" = ANY (ARRAY['owner'::"text", 'admin'::"text", 'editor'::"text"])))))));
+
+CREATE POLICY "devices_delete" ON "public"."devices" FOR DELETE USING ((EXISTS ( SELECT 1
    FROM "public"."memberships" "m"
   WHERE (("m"."organization_id" = "devices"."organization_id") AND ("m"."user_id" = "auth"."uid"()) AND ("m"."role" = 'owner'::"text")))));
 
@@ -1067,6 +1115,8 @@ CREATE POLICY "memberships_update_self_or_owner_admin" ON "public"."memberships"
 
 ALTER TABLE "public"."organizations" ENABLE ROW LEVEL SECURITY;
 
+ALTER TABLE "public"."org_invites" ENABLE ROW LEVEL SECURITY;
+
 
 CREATE POLICY "orgs_insert_authenticated" ON "public"."organizations" FOR INSERT WITH CHECK (("auth"."uid"() IS NOT NULL));
 
@@ -1076,7 +1126,13 @@ CREATE POLICY "orgs_select_if_member" ON "public"."organizations" FOR SELECT USI
 
 
 
-CREATE POLICY "orgs_update_if_member" ON "public"."organizations" FOR UPDATE USING ("public"."is_org_member"("auth"."uid"(), "id")) WITH CHECK ("public"."is_org_member"("auth"."uid"(), "id"));
+CREATE POLICY "orgs_update_if_admin_owner" ON "public"."organizations" FOR UPDATE USING ("public"."is_org_admin_or_owner"("auth"."uid"(), "id")) WITH CHECK ("public"."is_org_admin_or_owner"("auth"."uid"(), "id"));
+
+CREATE POLICY "org_invites_select_owner_admin" ON "public"."org_invites" FOR SELECT USING ("public"."is_org_admin_or_owner"("auth"."uid"(), "organization_id"));
+
+CREATE POLICY "org_invites_insert_owner_admin" ON "public"."org_invites" FOR INSERT WITH CHECK ("public"."is_org_admin_or_owner"("auth"."uid"(), "organization_id"));
+
+CREATE POLICY "org_invites_update_owner_admin" ON "public"."org_invites" FOR UPDATE USING ("public"."is_org_admin_or_owner"("auth"."uid"(), "organization_id")) WITH CHECK ("public"."is_org_admin_or_owner"("auth"."uid"(), "organization_id"));
 
 
 
@@ -1573,6 +1629,10 @@ GRANT ALL ON TABLE "public"."memberships" TO "service_role";
 GRANT ALL ON TABLE "public"."organizations" TO "anon";
 GRANT ALL ON TABLE "public"."organizations" TO "authenticated";
 GRANT ALL ON TABLE "public"."organizations" TO "service_role";
+
+GRANT ALL ON TABLE "public"."org_invites" TO "anon";
+GRANT ALL ON TABLE "public"."org_invites" TO "authenticated";
+GRANT ALL ON TABLE "public"."org_invites" TO "service_role";
 
 
 

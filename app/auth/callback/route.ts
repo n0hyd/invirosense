@@ -1,6 +1,7 @@
 ﻿// app/auth/callback/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -21,6 +22,17 @@ export async function GET(req: Request) {
     loginUrl.searchParams.set("error", "auth");
     loginUrl.searchParams.set("next", next);
     return NextResponse.redirect(loginUrl.toString());
+  }
+
+  const { data: userData } = await supabase.auth.getUser();
+  const email = userData?.user?.email ?? null;
+  if (email && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    const admin = createAdminClient();
+    await admin
+      .from("org_invites")
+      .update({ status: "accepted", accepted_at: new Date().toISOString() })
+      .eq("email", email)
+      .eq("status", "pending");
   }
 
   return NextResponse.redirect(new URL(next, url.origin).toString());

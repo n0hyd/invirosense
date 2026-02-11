@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 const DEVICE_FIELDS = [
 "id",
 "name",
+"organization_id",
 "status",
 "last_seen",
 "temp_min",
@@ -58,8 +59,29 @@ return (
 );
 }
 
+const { data: userData } = await supabase.auth.getUser();
+let role: string | null = null;
+if (userData?.user?.id && device.organization_id) {
+const { data: member } = await supabase
+.from("memberships")
+.select("role")
+.eq("user_id", userData.user.id)
+.eq("organization_id", device.organization_id)
+.maybeSingle();
+role = member?.role ?? null;
+}
+
+const canEditDevice = role === "owner" || role === "admin" || role === "editor";
+const canDeleteDevice = role === "owner";
+
 
 return (
-<DevicePage device={device} unit={unit} expectedIntervalMin={15} />
+<DevicePage
+device={device}
+unit={unit}
+expectedIntervalMin={15}
+canEditDevice={canEditDevice}
+canDeleteDevice={canDeleteDevice}
+/>
 );
 }

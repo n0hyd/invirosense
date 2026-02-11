@@ -79,12 +79,13 @@ export default function DeviceCard({ device, current, stats24h, unit, href, expe
   const rhHigh = rh != null && rhMax != null && rh > rhMax;
   const hasAnyAlert = !!(tempLow || tempHigh || rhLow || rhHigh);
 
-  // Offline if last check-in > 2x expected interval
+  // Offline if last check-in > 2x expected interval (with a minimum grace window)
   const offline = (() => {
     if (!current?.at) return true;
     const atMs = new Date(current.at).getTime();
     if (!Number.isFinite(atMs)) return true;
-    const maxAgeMs = 2 * expectedIntervalMin * 60 * 1000;
+    const minGraceMin = 30;
+    const maxAgeMs = Math.max(2 * expectedIntervalMin, minGraceMin) * 60 * 1000;
     return Date.now() - atMs > maxAgeMs;
   })();
 
@@ -94,8 +95,14 @@ export default function DeviceCard({ device, current, stats24h, unit, href, expe
   if (rhLow && rhMin != null && rh != null)    alertLines.push(`RH under min by ${Math.round(rhMin - rh)}%`);
   if (rhHigh && rhMax != null && rh != null)   alertLines.push(`RH over max by ${Math.round(rh - rhMax)}%`);
 
-  const tempRangeLabel = `${fmtTempAbs(tMinC, unit)} - ${fmtTempAbs(tMaxC, unit)}`;
-  const rhRangeLabel = `${fmtRHAbs(rhMin)} - ${fmtRHAbs(rhMax)}`;
+  const tempRangeLabel =
+    tMinC == null && tMaxC == null
+      ? "Not set"
+      : `${fmtTempAbs(tMinC, unit)} - ${fmtTempAbs(tMaxC, unit)}`;
+  const rhRangeLabel =
+    rhMin == null && rhMax == null
+      ? "Not set"
+      : `${fmtRHAbs(rhMin)} - ${fmtRHAbs(rhMax)}`;
 
   const currentTempLabel = fmtTempAbs(tC, unit);
   const currentRHLabel = rh == null ? "-" : `${rh.toFixed(1)}%`;
@@ -120,19 +127,30 @@ export default function DeviceCard({ device, current, stats24h, unit, href, expe
     </span>
   );
 
+  const statusVariant: "online" | "offline" | "alert" =
+    offline ? "offline" : hasAnyAlert ? "alert" : "online";
+
   // --- Card UI (equal height) ---
   const cardInner = (
     <div
       className={clsx(
         "relative overflow-hidden rounded-2xl border shadow-sm transition h-full",
         "bg-white text-zinc-900",
-        (offline || hasAnyAlert) ? "border-red-300" : "border-zinc-200"
+        statusVariant === "offline" || statusVariant === "alert"
+          ? "border-red-300"
+          : statusVariant === "online"
+          ? "border-emerald-300"
+          : "border-zinc-200"
       )}
     >
       {/* Left alert stripe for either offline or alert */}
       <div className={clsx(
-        "absolute left-0 top-0 h-full w-1",
-        (offline || hasAnyAlert) ? "bg-red-500" : "bg-transparent"
+        "absolute left-0 top-0 h-full",
+        statusVariant === "offline" || statusVariant === "alert"
+          ? clsx("bg-red-500 w-1.5", statusVariant === "alert" && "animate-pulse")
+          : statusVariant === "online"
+          ? "bg-emerald-500 w-1.5"
+          : "bg-transparent w-0"
       )} />
 
       <div className="p-4 flex flex-col gap-2 h-full">
@@ -175,9 +193,9 @@ export default function DeviceCard({ device, current, stats24h, unit, href, expe
           </div>
         </div>
 
-        {/* Ranges */}
+        {/* Alert thresholds */}
         <p className="text-xs text-zinc-600">
-          <span className="font-medium">Ranges:</span> Temp {tempRangeLabel} - RH {rhRangeLabel}
+          <span className="font-medium">Alert thresholds:</span> Temp {tempRangeLabel} • RH {rhRangeLabel}
         </p>
 
         {/* Alerts (stick to bottom, equal height) */}

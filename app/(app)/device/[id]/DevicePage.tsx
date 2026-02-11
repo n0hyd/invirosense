@@ -12,13 +12,14 @@ import {
   Tooltip,
   Line,
 } from "recharts";
-import { Thermometer, Droplet, WifiOff, Timer } from "lucide-react";
+import { Thermometer, Droplet, WifiOff, Timer, Pencil } from "lucide-react";
 import clsx from "clsx";
 
 // ---------- Types ----------
 export type Device = {
   id: string;
   name: string;
+  organization_id?: string | null;
   status: string | null;
   last_seen: string | null;
   temp_min: number | null; // °C in DB
@@ -236,8 +237,8 @@ function ThresholdAndFrequency({
   const saveTemp = async () => {
     setSaving("temp");
     const payload = {
-      temp_min: parseTempToC(state.temp_min),
-      temp_max: parseTempToC(state.temp_max),
+      temp_min: state.temp_min,
+      temp_max: state.temp_max,
     };
     const { error } = await supabase.from("devices").update(payload).eq("id", deviceId);
     setSaving(null);
@@ -427,10 +428,14 @@ export default function DevicePage({
   device,
   unit: unitProp = "F",
   expectedIntervalMin: _expectedIntervalMin = 15, // unused now; we rely on live-fetched interval
+  canEditDevice = false,
+  canDeleteDevice = false,
 }: {
   device: Device;
   unit?: "F" | "C";
   expectedIntervalMin?: number;
+  canEditDevice?: boolean;
+  canDeleteDevice?: boolean;
 }) {
   const supabase = React.useMemo(() => createClient(), []);
   const [readings, setReadings] = React.useState<Reading[]>([]);
@@ -439,6 +444,14 @@ export default function DevicePage({
   const [alertEvents, setAlertEvents] = React.useState<AlertEventRow[]>([]);
   const [activeAlerts, setActiveAlerts] = React.useState<AlertRow[]>([]);
   const [alertsLoading, setAlertsLoading] = React.useState(true);
+  const [name, setName] = React.useState<string>(device.name);
+  const [editingName, setEditingName] = React.useState(false);
+  const [savingName, setSavingName] = React.useState(false);
+  const [nameError, setNameError] = React.useState<string | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
+  const [devicesList, setDevicesList] = React.useState<Array<{ id: string; name: string }>>([]);
+  const [rangeKey, setRangeKey] = React.useState<"today" | "3d" | "7d" | "30d">("today");
 
   // Live interval value (used for badge + offline logic)
   const [intervalMin, setIntervalMin] = React.useState<number>(
@@ -473,32 +486,62 @@ export default function DevicePage({
 
   React.useEffect(() => {
     let cancelled = false;
+    const params = new URLSearchParams(window.location.search);
+    const r = params.get("range");
+    if (r === "3d" || r === "7d" || r === "30d" || r === "today") {
+      setRangeKey(r);
+    }
+    (async () => {
+      const { data } = await supabase
+        .from("devices")
+        .select("id,name")
+        .order("name", { ascending: true });
+      if (!cancelled && data) {
+        setDevicesList(data as Array<{ id: string; name: string }>);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
+
+  const rangeLabel = React.useMemo(() => {
+    if (rangeKey === "today") return "Last 24 hours";
+    if (rangeKey === "3d") return "Last 3 days";
+    if (rangeKey === "7d") return "Last 7 days";
+    return "Last 30 days";
+  }, [rangeKey]);
+
+  const rangeDays = React.useMemo(
+    () => (rangeKey === "today" ? 1 : rangeKey === "3d" ? 3 : rangeKey === "7d" ? 7 : 30),
+    [rangeKey]
+  );
+
+  const rangeSinceIso = React.useMemo(() => {
+    const now = new Date();
+    return new Date(now.getTime() - rangeDays * 24 * 60 * 60 * 1000).toISOString();
+  }, [rangeDays]);
+
+  const maxPoints = React.useMemo(() => {
+    const interval = Math.max(1, intervalMin);
+    const expected = Math.ceil((rangeDays * 24 * 60) / interval);
+    return Math.min(10000, expected + 25);
+  }, [intervalMin, rangeDays]);
+
+  React.useEffect(() => {
+    let cancelled = false;
     async function load() {
       setLoading(true);
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const { data: recent } = await supabase
         .from("sensor_readings")
         .select("ts,temp_c,rh")
         .eq("device_id", device.id)
-        .gte("ts", since)
+        .gte("ts", rangeSinceIso)
         .order("ts", { ascending: false })
-        .limit(500);
-
-      if (!cancelled && recent && recent.length) {
-        setReadings(recent as Reading[]);
-        setLoading(false);
-        return;
-      }
-
-      const { data: any500 } = await supabase
-        .from("sensor_readings")
-        .select("ts,temp_c,rh")
-        .eq("device_id", device.id)
-        .order("ts", { ascending: false })
-        .limit(500);
+        .limit(maxPoints);
 
       if (!cancelled) {
-        setReadings((any500 || []) as Reading[]);
+        setReadings((recent || []) as Reading[]);
         setLoading(false);
       }
     }
@@ -506,7 +549,7 @@ export default function DevicePage({
     return () => {
       cancelled = true;
     };
-  }, [device.id, supabase]);
+  }, [device.id, supabase, rangeSinceIso, maxPoints]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -522,6 +565,7 @@ export default function DevicePage({
         .from("alert_events")
         .select("id,alert_id,event_type,value,created_at,alerts ( rule )")
         .eq("device_id", device.id)
+        .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
         .order("created_at", { ascending: false })
         .limit(50);
 
@@ -543,25 +587,62 @@ export default function DevicePage({
 
   const last24 = React.useMemo(() => {
     if (!readings.length)
-      return { tMin: null, tMax: null, hMin: null, hMax: null };
+      return { tMin: null, tMax: null, hMin: null, hMax: null, tAvg: null, hAvg: null };
     let tMin: number | null = null,
       tMax: number | null = null,
       hMin: number | null = null,
       hMax: number | null = null;
+    let tSum = 0;
+    let tCount = 0;
+    let hSum = 0;
+    let hCount = 0;
     for (const r of readings) {
       if (isFiniteNum(r.temp_c)) {
         tMin = tMin === null ? r.temp_c : Math.min(tMin, r.temp_c);
         tMax = tMax === null ? r.temp_c : Math.max(tMax, r.temp_c);
+        tSum += r.temp_c;
+        tCount += 1;
       }
       if (isFiniteNum(r.rh)) {
         hMin = hMin === null ? r.rh : Math.min(hMin, r.rh);
         hMax = hMax === null ? r.rh : Math.max(hMax, r.rh);
+        hSum += r.rh;
+        hCount += 1;
       }
     }
-    return { tMin, tMax, hMin, hMax };
+    const tAvg = tCount ? tSum / tCount : null;
+    const hAvg = hCount ? hSum / hCount : null;
+    return { tMin, tMax, hMin, hMax, tAvg, hAvg };
   }, [readings]);
 
-  const chartData = React.useMemo(() => [...readings].reverse(), [readings]);
+  const chartData = React.useMemo(
+    () => [...readings].reverse().map((r) => ({ ...r, ts_ms: new Date(r.ts).getTime() })),
+    [readings]
+  );
+
+  const hourlyTicks = React.useMemo(() => {
+    if (rangeKey !== "today") return undefined;
+    const end = new Date();
+    const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+    const ticks: string[] = [];
+    const t = new Date(start);
+    t.setMinutes(0, 0, 0);
+    if (t < start) t.setHours(t.getHours() + 1);
+    while (t <= end) {
+      ticks.push(t.toISOString());
+      t.setHours(t.getHours() + 1);
+    }
+    return ticks.map((iso) => new Date(iso).getTime());
+  }, [rangeKey]);
+
+  const formatHourTick = React.useCallback((v: number) => {
+    const d = new Date(v);
+    const hours = d.getHours();
+    const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+    const meridiem = hours < 12 ? "am" : "pm";
+    if (hour12 === 12 || hour12 === 6) return `${hour12}${meridiem}`;
+    return String(hour12);
+  }, []);
 
   // ---- Alerts + Status ----
   // Use live `intervalMin` (persisted) for offline determination
@@ -570,7 +651,8 @@ export default function DevicePage({
   const minsSinceSeen = lastSeen
     ? Math.floor((now.getTime() - lastSeen.getTime()) / 60000)
     : Number.POSITIVE_INFINITY;
-  const isOffline = minsSinceSeen > intervalMin * 2;
+  const minGraceMin = 30;
+  const isOffline = minsSinceSeen > Math.max(intervalMin * 2, minGraceMin);
 
   const tempHighBreach =
     isFiniteNum(tempC) && isFiniteNum(device.temp_max) ? tempC > device.temp_max : false;
@@ -645,10 +727,136 @@ export default function DevicePage({
 
   return (
     <div className="space-y-6">
+      {/* Device + Range */}
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-sm text-zinc-600">
+          <span className="font-medium">Device:</span>
+          <select
+            className="rounded-lg border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            value={device.id}
+            onChange={(e) => {
+              const next = e.currentTarget.value;
+              window.location.href = `/device/${next}?unit=${unit}&range=${rangeKey}`;
+            }}
+          >
+            {devicesList.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm text-zinc-600">
+          <span className="font-medium">Date Range:</span>
+          <select
+            className="rounded-lg border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            value={rangeKey}
+            onChange={(e) => {
+              const next = e.currentTarget.value as "today" | "3d" | "7d" | "30d";
+              setRangeKey(next);
+              const params = new URLSearchParams(window.location.search);
+              params.set("range", next);
+              params.set("unit", unit);
+              window.history.replaceState(null, "", `/device/${device.id}?${params.toString()}`);
+            }}
+          >
+            <option value="today">Today</option>
+            <option value="3d">Last 3 days</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+          </select>
+        </label>
+      </div>
+
       {/* Header with status pill + unit toggle + frequency badge */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-zinc-900">{device.name}</h1>
+          <div className="flex items-center gap-2">
+            {editingName ? (
+              <div className="flex items-center gap-2">
+                <input
+                  className="w-72 max-w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-2xl font-bold tracking-tight text-zinc-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={name}
+                  onChange={(e) => setName(e.currentTarget.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      if (!name.trim()) {
+                        setNameError("Name cannot be empty.");
+                        return;
+                      }
+                      setSavingName(true);
+                      setNameError(null);
+                      const { error } = await supabase
+                        .from("devices")
+                        .update({ name: name.trim() })
+                        .eq("id", device.id);
+                      setSavingName(false);
+                      if (error) {
+                        setNameError(error.message);
+                        return;
+                      }
+                      setEditingName(false);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      setName(device.name);
+                      setNameError(null);
+                      setEditingName(false);
+                    }
+                  }}
+                />
+                <button
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+                  disabled={savingName}
+                  onClick={async () => {
+                    if (!name.trim()) {
+                      setNameError("Name cannot be empty.");
+                      return;
+                    }
+                    setSavingName(true);
+                    setNameError(null);
+                    const { error } = await supabase
+                      .from("devices")
+                      .update({ name: name.trim() })
+                      .eq("id", device.id);
+                    setSavingName(false);
+                    if (error) {
+                      setNameError(error.message);
+                      return;
+                    }
+                    setEditingName(false);
+                  }}
+                >
+                  {savingName ? "Saving..." : "Save"}
+                </button>
+                <button
+                  className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50"
+                  onClick={() => {
+                    setName(device.name);
+                    setNameError(null);
+                    setEditingName(false);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <>
+                <h1 className="text-3xl font-bold tracking-tight text-zinc-900">{name}</h1>
+                {canEditDevice && (
+                  <button
+                    className="inline-flex items-center rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs font-semibold text-zinc-600 hover:bg-zinc-50"
+                    onClick={() => setEditingName(true)}
+                    aria-label="Edit device name"
+                    title="Edit device name"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+          {nameError && (
+            <p className="mt-1 text-sm text-red-600">{nameError}</p>
+          )}
           <p className="mt-1 text-sm text-zinc-500">Live status and latest readings</p>
         </div>
         <div className="flex items-center gap-2">
@@ -692,10 +900,10 @@ export default function DevicePage({
           <p className="mt-3 text-xs text-zinc-500">Last heard: {fmtTS(device.last_seen)}</p>
         </div>
 
-        {/* 24h High/Low Combined */}
+        {/* Range High/Low/Avg */}
         <div className="rounded-2xl bg-white p-4 shadow">
-          <h3 className="text-sm font-medium text-zinc-500">24h High / Low</h3>
-          <div className="mt-2 grid grid-cols-2 gap-4">
+          <h3 className="text-sm font-medium text-zinc-500">{rangeLabel} High / Low / Avg</h3>
+          <div className="mt-2 grid grid-cols-3 gap-4">
             <div>
               <p className="text-xs text-zinc-500">High</p>
               <p className="text-2xl font-semibold text-zinc-900">{fmtTemp(last24.tMax, unit)}</p>
@@ -706,11 +914,19 @@ export default function DevicePage({
               <p className="text-2xl font-semibold text-zinc-900">{fmtTemp(last24.tMin, unit)}</p>
               <p className="text-2xl font-semibold text-zinc-900">{fmtRH(last24.hMin)}</p>
             </div>
+            <div>
+              <p className="text-xs text-zinc-500">Avg.</p>
+              <p className="text-2xl font-semibold text-zinc-900">{fmtTemp(last24.tAvg, unit)}</p>
+              <p className="text-2xl font-semibold text-zinc-900">{fmtRH(last24.hAvg)}</p>
+            </div>
           </div>
         </div>
 
         {/* Current Alerts */}
-        <div className="rounded-2xl bg-white p-4 shadow">
+        <div className={clsx(
+          "relative rounded-2xl bg-white p-4 shadow",
+          alerts.length > 0 && "ring-2 ring-red-300"
+        )}>
           <h3 className="text-sm font-medium text-zinc-500">Current Alerts</h3>
           <div className="mt-2 text-sm">
             {alerts.length === 0 ? (
@@ -725,7 +941,7 @@ export default function DevicePage({
       {/* Chart */}
       <div className="rounded-2xl bg-white p-4 shadow">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium text-zinc-500">Last 24 hours</h3>
+          <h3 className="text-sm font-medium text-zinc-500">{rangeLabel}</h3>
         <div className="flex items-center gap-3 text-xs text-zinc-600">
             <span className="inline-flex items-center gap-1">
               <span className="h-0.5 w-4 rounded bg-red-500" /> Temp
@@ -745,17 +961,26 @@ export default function DevicePage({
               No readings
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="ts"
-                  tickFormatter={(v) =>
-                    new Date(v).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                  }
-                  minTickGap={32}
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={rangeKey === "today"} />
+              <XAxis
+                dataKey="ts_ms"
+                type="number"
+                domain={["dataMin", "dataMax"]}
+                allowDataOverflow
+                tickFormatter={formatHourTick}
+                ticks={hourlyTicks}
+                interval={hourlyTicks ? 0 : undefined}
+                minTickGap={32}
+                padding={{ left: 0, right: 0 }}
+              />
+                <YAxis
+                  yAxisId="temp"
+                  domain={["auto", "auto"]}
+                  allowDecimals
+                  tickFormatter={(v) => fmtTemp(Number(v), unit)}
                 />
-                <YAxis yAxisId="temp" domain={["auto", "auto"]} allowDecimals />
                 <YAxis yAxisId="rh" orientation="right" domain={[0, 100]} />
                 <Tooltip
                   labelFormatter={(v) => new Date(v).toLocaleString()}
@@ -839,11 +1064,51 @@ export default function DevicePage({
       </div>
 
       {/* Editors BELOW the chart */}
-      <ThresholdAndFrequency
-        deviceId={device.id}
-        unit={unit}
-        onIntervalChanged={(m) => setIntervalMin(m)}
-      />
+      {canEditDevice && (
+        <ThresholdAndFrequency
+          deviceId={device.id}
+          unit={unit}
+          onIntervalChanged={(m) => setIntervalMin(m)}
+        />
+      )}
+
+      {/* Delete device */}
+      {canDeleteDevice && (
+        <div className="rounded-2xl border border-red-200 bg-red-50/40 p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-semibold text-red-700">Delete device</h3>
+              <p className="mt-1 text-xs text-red-600">
+                This permanently removes the device and its readings.
+              </p>
+            </div>
+            <button
+              className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 disabled:opacity-60"
+              disabled={deleting}
+              onClick={async () => {
+                const ok = window.confirm(
+                  `Delete device "${device.name}"? This cannot be undone.`
+                );
+                if (!ok) return;
+                setDeleting(true);
+                setDeleteError(null);
+                const { error } = await supabase.from("devices").delete().eq("id", device.id);
+                setDeleting(false);
+                if (error) {
+                  setDeleteError(error.message);
+                  return;
+                }
+                window.location.href = "/devices";
+              }}
+            >
+              {deleting ? "Deleting..." : "Delete device"}
+            </button>
+          </div>
+          {deleteError && (
+            <p className="mt-2 text-xs text-red-700">Delete failed: {deleteError}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

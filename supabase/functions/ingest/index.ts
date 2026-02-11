@@ -77,7 +77,27 @@ serve(async (req) => {
       count: readings.length,
     }));
 
-    return json({ ok: true }, 200);
+    const { data: deviceRow, error: deviceErr } = await supabase
+      .from("devices")
+      .select("sample_interval_min,report_interval_min")
+      .eq("id", device_id)
+      .maybeSingle();
+
+    if (deviceErr) {
+      console.log(JSON.stringify({
+        level: "warn",
+        msg: "device interval lookup failed",
+        device_id,
+        error: deviceErr,
+      }));
+    }
+
+    const intervalMin =
+      (typeof deviceRow?.sample_interval_min === "number" ? deviceRow.sample_interval_min : null) ??
+      (typeof deviceRow?.report_interval_min === "number" ? deviceRow.report_interval_min : null) ??
+      15;
+
+    return json({ ok: true, interval_min: intervalMin }, 200);
   } catch (e) {
     console.log(JSON.stringify({
       level: "error",
